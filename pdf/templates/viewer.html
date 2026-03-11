@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF在线预览</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='viewer.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+    <div class="viewer-container">
+        <div class="toolbar">
+            <div class="toolbar-left">
+                <button id="prevPage" class="toolbar-btn" title="上一页">‹</button>
+                <span class="page-info">
+                    <span id="pageNum">1</span> / <span id="pageCount">-</span>
+                </span>
+                <button id="nextPage" class="toolbar-btn" title="下一页">›</button>
+            </div>
+            <div class="toolbar-center">
+                <button id="zoomOut" class="toolbar-btn" title="缩小">−</button>
+                <span class="zoom-info">
+                    <span id="zoomLevel">100</span>%
+                </span>
+                <button id="zoomIn" class="toolbar-btn" title="放大">+</button>
+                <button id="fitWidth" class="toolbar-btn" title="适应宽度">适应宽度</button>
+            </div>
+            <div class="toolbar-right">
+                <button id="downloadBtn" class="toolbar-btn" title="下载PDF">下载</button>
+            </div>
+        </div>
+
+        <div class="canvas-container">
+            <canvas id="pdfCanvas"></canvas>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>正在加载PDF...</p>
+        </div>
+
+        <div class="error hidden" id="error">
+            <p>PDF加载失败，请稍后重试</p>
+        </div>
+    </div>
+
+    <script>
+        // 设置PDF.js worker路径
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        const pdfUrl = '{{ pdf_url }}';
+        let pdfDoc = null;
+        let pageNum = 1;
+        let pageRendering = false;
+        let pageNumPending = null;
+        let scale = 1.0;
+        const scaleDelta = 0.2;
+
+        const canvas = document.getElementById('pdfCanvas');
+        const ctx = canvas.getContext('2d');
+        const pageNumSpan = document.getElementById('pageNum');
+        const pageCountSpan = document.getElementById('pageCount');
+        const zoomLevelSpan = document.getElementById('zoomLevel');
+        const prevPageBtn = document.getElementById('prevPage');
+        const nextPageBtn = document.getElementById('nextPage');
+        const zoomInBtn = document.getElementById('zoomIn');
+        const zoomOutBtn = document.getElementById('zoomOut');
+        const fitWidthBtn = document.getElementById('fitWidth');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+
+        // 渲染PDF页面
+        function renderPage(num) {
+            pageRendering = true;
+            
+            pdfDoc.getPage(num).then(function(page) {
+                const viewport = page.getViewport({ scale: scale });
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+
+                const renderContext = {
+                    canvasContext: ctx,
+                    viewport: viewport
+                };
+                
+                const renderTask = page.render(renderContext);
+                
+                renderTask.promise.then(function() {
+                    pageRendering = false;
+                    if (pageNumPending !== null) {
+                        renderPage(pageNumPending);
+                        pageNumPending = null;
+                    }
+                    updatePageInfo();
+                });
+            });
+        }
+
+        // 更新页面信息
+        function updatePageInfo() {
+            pageNumSpan.textContent = pageNum;
+            pageCountSpan.textContent = pdfDoc.numPages;
+            zoomLevelSpan.textContent = Math.round(scale * 100);
+        }
+
+        // 上一页
+        function prevPage() {
+            if (pageNum <= 1) return;
+            pageNum--;
+            queueRenderPage(pageNum);
+        }
+
+        // 下一页
+        function nextPage() {
+            if (pageNum >= pdfDoc.numPages) return;
+            pageNum++;
+            queueRenderPage(pageNum);
+        }
+
+        // 队列渲染页面
+        function queueRenderPage(num) {
+            if (pageRendering) {
+                pageNumPending = num;
+            } else {
+                renderPage(num);
+            }
+        }
+
+        // 放大
+        function zoomIn() {
+            scale += scaleDelta;
+            queueRenderPage(pageNum);
+        }
+
+        // 缩小
+        function zoomOut() {
+            if (scale <= scaleDelta) return;
+            scale -= scaleDelta;
+            queueRenderPage(pageNum);
+        }
+
+        // 适应宽度
+        function fitToWidth() {
+            pdfDoc.getPage(pageNum).then(function(page) {
+                const containerWidth = canvas.parentElement.clientWidth - 40;
+                const viewport = page.getViewport({ scale: 1.0 });
+                scale = containerWidth / viewport.width;
+                queueRenderPage(pageNum);
+            });
+        }
+
+        // 下载PDF
+        function downloadPDF() {
+            const link = document.createElement('a');
+            link.href = pdfUrl;
+            link.download = 'document.pdf';
+            link.click();
+        }
+
+        // 事件监听
+        prevPageBtn.addEventListener('click', prevPage);
+        nextPageBtn.addEventListener('click', nextPage);
+        zoomInBtn.addEventListener('click', zoomIn);
+        zoomOutBtn.addEventListener('click', zoomOut);
+        fitWidthBtn.addEventListener('click', fitToWidth);
+        downloadBtn.addEventListener('click', downloadPDF);
+
+        // 键盘快捷键
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                prevPage();
+            } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                nextPage();
+            } else if (e.key === '+' || e.key === '=') {
+                zoomIn();
+            } else if (e.key === '-') {
+                zoomOut();
+            }
+        });
+
+        // 加载PDF
+        loading.classList.remove('hidden');
+        pdfjsLib.getDocument(pdfUrl).promise.then(function(pdf) {
+            pdfDoc = pdf;
+            loading.classList.add('hidden');
+            renderPage(pageNum);
+        }).catch(function(err) {
+            console.error('PDF加载错误:', err);
+            loading.classList.add('hidden');
+            error.classList.remove('hidden');
+        });
+
+        // 移动端触摸支持
+        let touchStartX = 0;
+        let touchStartY = 0;
+
+        canvas.addEventListener('touchstart', function(e) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+        });
+
+        canvas.addEventListener('touchend', function(e) {
+            if (!touchStartX || !touchStartY) return;
+            
+            const touchEndX = e.changedTouches[0].clientX;
+            const touchEndY = e.changedTouches[0].clientY;
+            
+            const diffX = touchStartX - touchEndX;
+            const diffY = touchStartY - touchEndY;
+            
+            if (Math.abs(diffX) > Math.abs(diffY)) {
+                if (diffX > 50) {
+                    nextPage();
+                } else if (diffX < -50) {
+                    prevPage();
+                }
+            }
+            
+            touchStartX = 0;
+            touchStartY = 0;
+        });
+    </script>
+</body>
+</html>
